@@ -47,12 +47,12 @@ def detect_lang(f, length=48000):
     return lang
 
 
-def identify_lang(flist, seconds=60):
+def identify_lang(flist, seconds=60, nj=8):
     result = []
     
     alist = [a for _, a in flist]
     torch.set_num_threads(1)
-    langs = p_map(detect_lang, alist, num_cpus=8)
+    langs = p_map(detect_lang, alist, num_cpus=nj)
 
     for i in range(len(langs)):
         flist[i].append(langs[i])
@@ -246,7 +246,7 @@ def main():
         model = whisper.load_model("base", device='cpu')
         flist = filter_no_subtitle(args.db)
         print('language identification')
-        flist = identify_lang(flist)
+        flist = identify_lang(flist, nj=args.nj)
         dump_lang_flist(flist, args.dst)
 
     if args.stage < 3:
