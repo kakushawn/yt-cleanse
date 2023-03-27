@@ -5,6 +5,7 @@ stop_stage=3
 yt_stage=0
 srt_drop_start=3
 srt_drop_end=3
+lang='zh'
 nj=16
 
 set -e
@@ -27,6 +28,7 @@ formated_dir=$3
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   python main.py \
+    --lang $lang \
     --nj $nj \
     --stage $yt_stage \
     --srt-drop-begin $srt_drop_start \
@@ -60,20 +62,20 @@ if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
   touch $dst/.done
 fi
 
-if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
-  bash scripts/audio/format_wav_scp.sh \
-    --nj $nj --fs 16000 \
-    --segments $dst/data/segments \
-    $dst/data/wav.scp.piped $formated_dir
-fi
+# if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
+#   bash scripts/audio/format_wav_scp.sh \
+#     --nj $nj --fs 16000 \
+#     --segments $dst/data/segments \
+#     $dst/data/wav.scp.piped $formated_dir
+# fi
 
-if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
-  cp $dst/data/{text,utt2spk} $formated_dir
-  bash utils/data/get_utt2dur.sh --nj $nj --read-entire-file true $formated_dir
-  utils/fix_data_dir.sh $formated_dir
-  dur=$(bash local/get_total_duration.sh $formated_dir)
-  echo "duration: $dur"
-fi
+# if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
+#   cp $dst/data/{text,utt2spk} $formated_dir
+#   bash utils/data/get_utt2dur.sh --nj $nj --read-entire-file true $formated_dir
+#   utils/fix_data_dir.sh $formated_dir
+#   dur=$(bash local/get_total_duration.sh $formated_dir)
+#   echo "duration: $dur"
+# fi
 
 # ds=$(find /mnt/storage/shawn/crawling/youtube/ -maxdepth 1 -mindepth 1 -type d)
 # for d in $ds; do

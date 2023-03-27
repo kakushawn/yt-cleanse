@@ -16,20 +16,22 @@ parser.add_argument("--nj", default=8, type=int)
 parser.add_argument("--stage", default=1, type=int)
 parser.add_argument("--srt-drop-begin", default=0, type=int)
 parser.add_argument("--srt-drop-end", default=0, type=int)
+parser.add_argument("--lang", default="zh", type=str)
 parser.add_argument("db")
 parser.add_argument("dst")
 
 SRT_PATTERN = re.compile(r"^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} --> [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}")
 ZH_PATTERN = re.compile(r'[\u4e00-\u9fff\u3105-\u3129]')
+ZH_PATTERN = re.compile(r'[\u2E80-\u2FD5\u3190-\u319f\u3400-\u4DBF\u4E00-\u9FCC\uF900-\uFAAD\u3100-\u312f\u3040-\u309f\u30a0-\u30ff]')
 EN_PATTERN = re.compile(r'[a-zA-Z]+')
 
 
-def filter_no_subtitle(dst):
+def filter_no_subtitle(dst, lang='zh'):
     srt_list = glob(f"{dst}/*.vtt")
     flist = []
     for srt in srt_list:
-        prefix, lang, ext = srt.split(".")
-        if "zh" not in lang[:3]:
+        prefix, srt_lang, ext = srt.split(".")
+        if lang not in srt_lang[:3]:
             continue
         audio = f"{prefix}.opus"
         if not os.path.exists(audio):
@@ -38,13 +40,14 @@ def filter_no_subtitle(dst):
     return flist
 
 
-def detect_lang(f, length=48000):
+def detect_lang(f, length=480000):
+    # return 'zh'
     audio = whisper.load_audio(f)
-    audio = whisper.pad_or_trim(audio, length=480000)
+    audio = whisper.pad_or_trim(audio, length=length)
     mel = whisper.log_mel_spectrogram(audio).to(model.device)
     _, probs = model.detect_language(mel)
-    lang = max(probs, key=probs.get)
-    return lang
+    _lang = max(probs, key=probs.get)
+    return _lang
 
 
 def identify_lang(flist, seconds=60, nj=8):
@@ -74,8 +77,8 @@ def load_lang_flist(dst):
         lines = fp.read().splitlines()
     result = []
     for line in lines:
-        srt, audio, lang = line.strip("\n").split(" ")
-        result.append([srt, audio, lang])
+        srt, audio, _lang = line.strip("\n").split(" ")
+        result.append([srt, audio, _lang])
     return result
 
 
@@ -134,13 +137,13 @@ def check_zh_ratio(srt, ratio=1):
     return float(zhs)/float(ens) > ratio
 
 
-def filter_bad_srt(flist, drop_begin=0, drop_end=0):
+def filter_bad_srt(flist, drop_begin=0, drop_end=0, lang='zh'):
     result = []
-    for srt_file, audio_file, lang in flist:
+    for srt_file, audio_file, _lang in flist:
         srt = load_srt(srt_file, drop_begin=0, drop_end=0)
         audio = ffmpeg.probe(audio_file)
         # filter non zh lang
-        if lang != 'zh':
+        if _lang != lang:
             print('filtered by language identification', audio_file)
             continue
         # filter ratio between audio duration and srt size
@@ -188,19 +191,38 @@ def convert_vtt_timestamp(ts):
     return beg, end
 
 
-def convert_and_dump_segments(flist, dst, drop_begin=0, drop_end=0):
+def convert_and_dump_segments(flist, dst, drop_begin=0, drop_end=0, min_dur=10.0):
     result = []
     with open(f'{dst}/info.txt', 'w') as fp:
         for audio_file, srt_file in flist:
             tid = audio_file.split("/")[-1].split(".")[0][-11:]
             srt = load_srt(srt_file, drop_begin=drop_begin, drop_end=drop_end)
-            for ts, subtitle in srt:
+            ubegin = -1.0
+            uend = 0.0
+            udur = 0.0
+            usubtitle = []
+            for i in range(len(srt)):
+                ts = srt[i][0]
+                subtitle = srt[i][1]
                 try:
                     begin, end = convert_vtt_timestamp(ts)
-                    line = f'{tid}-{begin:010.2f}-{end:010.2f} {audio_file} {begin} {end} {subtitle}\n'
-                    fp.write(line)
+                    if ubegin == -1.0:
+                        ubegin = begin
+                    # dur = end - begin
+                    uend = end
+                    # udur = udur + dur
+                    udur = uend - ubegin
+                    usubtitle.append(subtitle)
+                    if udur >= min_dur or i == len(srt)-1:
+                        # uend = ubegin + udur
+                        line = f'{tid}-{ubegin:010.2f}-{uend:010.2f} {audio_file} {ubegin} {uend} {"，".join(usubtitle)}\n'
+                        ubegin = -1.0
+                        udur = 0.0
+                        usubtitle = []
+                        fp.write(line)
                 except Exception as e:
                     print('failed to parse srt for line:')
+                    print(e)
                     print(ts)
                     print(subtitle)
 
@@ -244,23 +266,28 @@ def main():
     global model
     if args.stage < 2:
         model = whisper.load_model("base", device='cpu')
-        flist = filter_no_subtitle(args.db)
+        flist = filter_no_subtitle(args.db, lang=args.lang)
         print('language identification')
         flist = identify_lang(flist, nj=args.nj)
         dump_lang_flist(flist, args.dst)
 
     if args.stage < 3:
+        print('filtering bad subtitle')
         flist = load_lang_flist(args.dst)
         flist = filter_bad_srt(
-            flist, drop_begin=args.srt_drop_begin, drop_end=args.srt_drop_end)
+            flist,
+            drop_begin=args.srt_drop_begin, drop_end=args.srt_drop_end,
+            lang=args.lang)
         dump_valitated_srt_flist(flist, args.dst)
 
     if args.stage < 4:
+        print('make info')
         flist = load_validated_srt_flist(args.dst)
         convert_and_dump_segments(
             flist, args.dst, drop_begin=args.srt_drop_begin, drop_end=args.srt_drop_end)
 
     if args.stage < 5:
+        print('make data')
         make_data(args.dst)
 
 
